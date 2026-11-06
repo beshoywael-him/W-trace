@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#14110e">
+<title>Woggle Tracer</title>
+<style>
+  :root{
+    --bg:#14110e; --panel:rgba(24,20,16,.86); --line:rgba(255,236,210,.14);
+    --fg:#f3e9dc; --muted:#b8a894; --accent:#e0a458; --accent-ink:#1d140a;
+    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px/1.35 var(--font);overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+  #stage{position:fixed;inset:0;overflow:hidden;background:#000}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  #ref{position:absolute;left:50%;top:50%;transform-origin:center;pointer-events:none;max-width:none;will-change:transform,opacity}
+  #grid{position:absolute;inset:0;pointer-events:none;background-image:
+      linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+      background-size:40px 40px;display:none}
+  #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:var(--bg);z-index:20}
+  #start h1{margin:0;font-size:26px;letter-spacing:.02em}
+  #start p{margin:0;max-width:34ch;color:var(--muted)}
+  #err{color:#ff9b8a;max-width:36ch}
+  button,.btn{font:inherit;color:var(--fg);background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-height:44px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+  button:focus-visible,.btn:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+  button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+  .primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600;padding:12px 22px}
+  input[type=file]{display:none}
+
+  #ui{position:fixed;left:0;right:0;bottom:0;z-index:10;padding:10px max(12px,env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));background:var(--panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px;transition:transform .2s}
+  #ui.hide{transform:translateY(110%)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .row.scroll{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .row.scroll::-webkit-scrollbar{display:none}
+  .row.scroll > *{flex:0 0 auto}
+  label.slider{flex:1;display:flex;align-items:center;gap:10px;min-width:0;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+  input[type=range]{flex:1;min-width:0;accent-color:var(--accent);height:28px}
+  .val{width:3.2em;text-align:right;color:var(--fg);font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:0}
+  #thumbs{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none}
+  #thumbs:empty{display:none}
+  #thumbs img{width:48px;height:48px;object-fit:cover;border-radius:10px;border:2px solid transparent;background:#fff;flex:0 0 auto}
+  #thumbs img.sel{border-color:var(--accent)}
+
+  #showUi{position:fixed;z-index:11;right:calc(12px + env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom));display:none;background:var(--panel)}
+  #toast{position:fixed;z-index:12;left:50%;top:calc(16px + env(safe-area-inset-top));transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);padding:8px 14px;border-radius:999px;opacity:0;transition:opacity .25s;pointer-events:none}
+  #lockBadge{position:fixed;z-index:11;left:calc(12px + env(safe-area-inset-left));top:calc(12px + env(safe-area-inset-top));background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:12px;padding:4px 10px;border-radius:999px;display:none}
+  @media (prefers-reduced-motion:reduce){#ui,#toast{transition:none}}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="ref"></canvas>
+  <div id="grid"></div>
+</div>
+
+<div id="start">
+  <h1>Woggle Tracer</h1>
+  <p>Point your camera at the wooden blank, lay your reference design over it, and trace with a pencil while watching the screen.</p>
+  <button class="primary" id="go">Start camera</button>
+  <div id="err" hidden></div>
+</div>
+
+<div id="lockBadge">Locked</div>
+<div id="toast"></div>
+<button id="showUi" aria-label="Show controls">Controls</button>
+
+<div id="ui">
+  <div id="thumbs"></div>
+  <div class="row">
+    <label class="btn" for="file">+ Image<input id="file" type="file" accept="image/*" multiple></label>
+    <label class="slider">Opacity <input id="opacity" type="range" min="0" max="100" value="50"><span class="val" id="opVal">50%</span></label>
+  </div>
+  <div class="row">
+    <label class="slider">Curve <input id="curve" type="range" min="0" max="100" value="0"><span class="val" id="curveVal">Flat</span></label>
+  </div>
+  <div class="row">
+    <label class="slider">Shape <input id="aspect" type="range" min="-100" max="100" value="0" aria-label="Aspect ratio: narrower or wider"><span class="val" id="aspectVal">1.00</span></label>
+    <button id="aspectReset" aria-label="Restore original aspect ratio">Original</button>
+  </div>
+  <div class="row scroll">
+    <button id="mode">Mode: Photo</button>
+    <button id="lock">Lock</button>
+    <button id="flip">Mirror</button>
+    <button id="rot">Rotate 90°</button>
+    <button id="gridBtn">Grid</button>
+    <button id="reset">Fit</button>
+    <button id="torch" hidden>Light</button>
+    <button id="switchCam">Flip camera</button>
+    <button id="hideUi">Hide controls</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const video = $('cam'), ref = $('ref'), stage = $('stage');
+  let stream = null, facing = 'environment', torchOn = false;
+
+  // ---------- camera ----------
+  async function startCamera(){
+    $('err').hidden = true;
+    if (!navigator.mediaDevices?.getUserMedia){
+      return showErr('This browser can’t open the camera from this page. Open the file over https (e.g. GitHub Pages) or in Chrome.');
+    }
+    try{
+      stream?.getTracks().forEach(t => t.stop());
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio:false,
+        video:{ facingMode:{ideal:facing}, width:{ideal:1920}, height:{ideal:1080} }
+      });
+      video.srcObject = stream;
+      video.style.transform = facing === 'user' ? 'scaleX(-1)' : '';
+      await video.play();
+      $('start').style.display = 'none';
+      const track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      $('torch').hidden = !caps.torch; torchOn = false; $('torch').classList.remove('on');
+      keepAwake();
+    }catch(e){
+      showErr(e.name === 'NotAllowedError'
+        ? 'Camera permission was blocked. Allow camera access for this page in your browser settings, then tap Start again.'
+        : 'Couldn’t open the camera (' + e.name + '). Make sure no other app is using it.');
+    }
+  }
+  function showErr(m){ const el=$('err'); el.textContent=m; el.hidden=false; $('start').style.display='flex'; }
+  $('go').onclick = startCamera;
+  $('switchCam').onclick = () => { facing = facing==='environment'?'user':'environment'; startCamera(); };
+  $('torch').onclick = async () => {
+    const t = stream?.getVideoTracks()[0]; if(!t) return;
+    torchOn = !torchOn;
+    try{ await t.applyConstraints({advanced:[{torch:torchOn}]}); $('torch').classList.toggle('on',torchOn);}catch{ torchOn=false; }
+  };
+
+  let wakeLock=null;
+  async function keepAwake(){ try{ wakeLock = await navigator.wakeLock?.request('screen'); }catch{} }
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && stream) keepAwake(); });
+
+  // ---------- reference images ----------
+  const images = []; // {src, lines}
+  let current = -1;
+  const MODES = ['Photo','Lines','Inverted'];
+  let mode = 0;
+
+  $('file').onchange = e => {
+    const files=[...e.target.files]; e.target.value='';
+    files.forEach((f,i) => {
+      const r = new FileReader();
+      r.onload = () => {
+        images.push({src:r.result, lines:null});
+        renderThumbs();
+        if (i === files.length-1) select(images.length-1, true);
+      };
+      r.readAsDataURL(f);
+    });
+  };
+
+  function renderThumbs(){
+    const box=$('thumbs'); box.innerHTML='';
+    images.forEach((im,i)=>{
+      const t=document.createElement('img'); t.src=im.src; t.alt='Reference '+(i+1);
+      if(i===current) t.className='sel';
+      t.onclick=()=>select(i,false);
+      box.appendChild(t);
+    });
+  }
+
+  function select(i, fit){
+    current=i; renderThumbs(); applyMode(fit);
+  }
+
+  // Lines mode: keep dark strokes, make the light background transparent
+  function makeLines(src){
+    return new Promise(res=>{
+      const im=new Image();
+      im.onload=()=>{
+        const max=1600, s=Math.min(1,max/Math.max(im.width,im.height));
+        const c=document.createElement('canvas'); c.width=Math.round(im.width*s); c.height=Math.round(im.height*s);
+        const x=c.getContext('2d'); x.drawImage(im,0,0,c.width,c.height);
+        const d=x.getImageData(0,0,c.width,c.height), p=d.data;
+        for(let k=0;k<p.length;k+=4){
+          const l=0.299*p[k]+0.587*p[k+1]+0.114*p[k+2];
+          const a=Math.max(0,Math.min(255,(200-l)*2.2)); // darker = more opaque
+          p[k]=255; p[k+1]=40; p[k+2]=40; p[k+3]=Math.min(a,p[k+3]); // bright red lines show on wood
+        }
+        x.putImageData(d,0,0); res(c.toDataURL('image/png'));
+      };
+      im.src=src;
+    });
+  }
+
+  let srcImg=null;
+  const loadImg=src=>new Promise(r=>{ const i=new Image(); i.onload=()=>r(i); i.src=src; });
+
+  async function applyMode(fit){
+    if(current<0) return;
+    const im=images[current];
+    let src=im.src;
+    if(mode===1){ if(!im.lines) im.lines=await makeLines(im.src); src=im.lines; }
+    ref.style.filter = mode===2 ? 'invert(1)' : '';
+    if(!srcImg || srcImg._src!==src){ srcImg=await loadImg(src); srcImg._src=src; }
+    renderWarp();
+    if(fit||!ref.dataset.ready){ fitRef(); ref.dataset.ready='1'; }
+    draw();
+    $('mode').textContent='Mode: '+MODES[mode];
+  }
+
+  // Curve: wraps the design around a cylinder (like a woggle ring) as seen from the front.
+  // The design keeps its real length along the surface, so it squeezes toward the edges.
+  function renderWarp(){
+    if(!srcImg) return;
+    const max=1400, s=Math.min(1,max/Math.max(srcImg.width,srcImg.height));
+    const W=Math.round(srcImg.width*s), H=Math.round(srcImg.height*s);
+    ref.width=W; ref.height=H;
+    const x=ref.getContext('2d'); x.clearRect(0,0,W,H);
+    const th=($('curve').value/100)*Math.PI*0.95; // wrap angle, up to ~170°
+    if(th<0.01){ x.drawImage(srcImg,0,0,W,H); return; }
+    const half=th/2, sh=Math.sin(half), sw=srcImg.width, slice=Math.max(1,sw/W);
+    for(let i=0;i<W;i++){
+      const xn=((i+0.5)/W)*2-1;               // position across the ring's face
+      const u=Math.asin(xn*sh)/half;            // position along the wrapped design
+      const sx=Math.min(sw-slice,Math.max(0,(u+1)/2*sw-slice/2));
+      x.drawImage(srcImg,sx,0,slice,srcImg.height,i,0,1,H);
+    }
+  }
+  let curveRaf=0;
+  $('curve').oninput=e=>{
+    const v=+e.target.value;
+    $('curveVal').textContent = v===0 ? 'Flat' : Math.round(v*1.71)+'°';
+    cancelAnimationFrame(curveRaf); curveRaf=requestAnimationFrame(()=>{ renderWarp(); draw(); });
+  };
+  $('mode').onclick=()=>{ mode=(mode+1)%MODES.length; applyMode(false); toast(MODES[mode]==='Lines'?'Lines: white background removed':MODES[mode]); };
+
+  // ---------- transform ----------
+  const T={x:0,y:0,scale:1,rot:0,flip:1};
+  function fitRef(){
+    const w=ref.width, h=ref.height; if(!srcImg||!w) return;
+    T.scale=Math.min(stage.clientWidth*0.8/w, stage.clientHeight*0.6/h);
+    T.x=0; T.y=-stage.clientHeight*0.08; T.rot=0; T.flip=1; draw();
+  }
+  // Aspect: slider -100..100 maps to width:height multiplier 1/4..4 (log scale), area kept constant
+  let aspect=1;
+  function setAspect(v){
+    $('aspect').value=v; aspect=Math.pow(2,v/50);
+    $('aspectVal').textContent=aspect.toFixed(2);
+    draw();
+  }
+  $('aspect').oninput=e=>setAspect(+e.target.value);
+  $('aspectReset').onclick=()=>setAspect(0);
+
+  function draw(){
+    const ax=Math.sqrt(aspect);
+    ref.style.transform=`translate(-50%,-50%) translate(${T.x}px,${T.y}px) rotate(${T.rot}rad) scale(${T.scale*T.flip*ax},${T.scale/ax})`;
+    ref.style.opacity=$('opacity').value/100;
+  }
+  $('opacity').oninput=e=>{ $('opVal').textContent=e.target.value+'%'; draw(); };
+  $('flip').onclick=()=>{ T.flip*=-1; draw(); };
+  $('rot').onclick=()=>{ T.rot+=Math.PI/2; draw(); };
+  $('reset').onclick=fitRef;
+  $('gridBtn').onclick=e=>{ const g=$('grid'); const on=g.style.display!=='block'; g.style.display=on?'block':'none'; e.currentTarget.classList.toggle('on',on); };
+
+  let locked=false;
+  $('lock').onclick=e=>{ locked=!locked; e.currentTarget.classList.toggle('on',locked); e.currentTarget.textContent=locked?'Unlock':'Lock'; $('lockBadge').style.display=locked?'block':'none'; toast(locked?'Locked: touches won’t move the design':'Unlocked'); };
+
+  // Gestures: 1 finger = move, 2 fingers = pinch zoom + rotate
+  const pts=new Map(); let g0=null;
+  const snap=()=>{ const a=[...pts.values()];
+    if(a.length===1) return {x:a[0].x,y:a[0].y,T:{...T}};
+    const [p,q]=a; return {cx:(p.x+q.x)/2,cy:(p.y+q.y)/2,d:Math.hypot(q.x-p.x,q.y-p.y),a:Math.atan2(q.y-p.y,q.x-p.x),T:{...T}}; };
+  stage.addEventListener('pointerdown',e=>{ if(locked||current<0) return; stage.setPointerCapture(e.pointerId); pts.set(e.pointerId,{x:e.clientX,y:e.clientY}); if(pts.size<=2) g0=snap(); });
+  stage.addEventListener('pointermove',e=>{
+    if(!pts.has(e.pointerId)||!g0) return;
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    const a=[...pts.values()];
+    if(a.length===1 && g0.x!==undefined){ T.x=g0.T.x+a[0].x-g0.x; T.y=g0.T.y+a[0].y-g0.y; }
+    else if(a.length>=2 && g0.d){
+      const [p,q]=a, d=Math.hypot(q.x-p.x,q.y-p.y), ang=Math.atan2(q.y-p.y,q.x-p.x);
+      T.scale=Math.max(0.02,g0.T.scale*d/g0.d); T.rot=g0.T.rot+(ang-g0.a);
+      T.x=g0.T.x+((p.x+q.x)/2-g0.cx); T.y=g0.T.y+((p.y+q.y)/2-g0.cy);
+    }
+    draw();
+  });
+  const up=e=>{ pts.delete(e.pointerId); g0=pts.size?snap():null; };
+  stage.addEventListener('pointerup',up); stage.addEventListener('pointercancel',up);
+  // desktop: wheel to zoom
+  stage.addEventListener('wheel',e=>{ if(locked) return; e.preventDefault(); T.scale*=Math.exp(-e.deltaY*0.0015); draw(); },{passive:false});
+
+  // ---------- UI show/hide ----------
+  $('hideUi').onclick=()=>{ $('ui').classList.add('hide'); $('showUi').style.display='inline-flex'; };
+  $('showUi').onclick=()=>{ $('ui').classList.remove('hide'); $('showUi').style.display='none'; };
+
+  let tt; function toast(m){ const t=$('toast'); t.textContent=m; t.style.opacity=1; clearTimeout(tt); tt=setTimeout(()=>t.style.opacity=0,1600); }
+})();
+</script>
+</body>
+</html>
